@@ -1,0 +1,1 @@
+example_sources = files(['example.c'])
