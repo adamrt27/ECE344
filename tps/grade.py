@@ -29,9 +29,9 @@ subprocess.run(
 testlog_path = build_dir.joinpath('meson-logs/testlog.json')
 
 test_weights = {
-    'tests/close_check.py': 20,
-    'tests/execve_check.py': 0,
-    'tests/ps_compare.py': 80,
+    'close_check.py': 20,
+    'execve_check.py': 0,
+    'ps_compare.py': 80,
 }
 
 grade = 0

@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     clangd \
     cmake \
     direnv \
+    gdb \
     git \
     locales \
     man-db \
