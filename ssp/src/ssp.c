@@ -66,12 +66,45 @@ int ssp_create(char *const *argv, int fd0, int fd1, int fd2) {
             perror("dup2 failed");
             exit(1);
         }        
-        
-        // TODO: Close all other file descriptors except 0, 1, and 2
-        // this current one is incorrect, see lab handout
-        for (int fd = 3; fd < MAX_FD; ++fd) {
-            close(fd);
+
+        // Close all file descriptors 
+        // open /proc/getpid()/fd and close all nonzero ones
+
+        // get directory path
+        char buf[1000];
+        sprintf(buf, "/proc/%d/fd", getpid());
+
+        // get file descriptor
+        int fd_dir = open(buf, O_RDONLY | O_DIRECTORY);
+        // check for errors
+        if (fd_dir == -1){
+            perror("open");
+            exit(1);
         }
+
+        // open directory
+        DIR *dir = fdopendir(fd_dir);
+        if (dir == NULL) {
+            perror("fopendir");
+            close(fd_dir); // close file descriptor if opening it fails
+            exit(1);
+        }
+
+        // read the contents of the directory
+        int fd;
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_type == DT_LNK) {
+                fd = atoi(entry->d_name);
+
+                if (fd > 2){
+                    close(fd);
+                }
+            }
+        }
+
+        closedir(dir);
+        close(fd_dir);
 
         // call execvp(argv[0], argv) to run the process
         execvp(argv[0], argv);
@@ -161,12 +194,12 @@ void ssp_wait() {
 }
 
 void ssp_print() {
-    // set up just, which is the length of the CMD  
+    // set up just, which is the length of the CMD, as well as the adopted_pid, status
     int just = 3;
     pid_t adopted_pid;
     int status;
 
-    // check for orphaned processes, as it affects formatting
+    // check for orphaned processes first, as it affects formatting
 
     // calling waitpid(-1, ...) gets all children, making sure its output is 
     // greater than 0 (ensures there is a relevant child process)
