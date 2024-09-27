@@ -102,8 +102,6 @@ int ssp_create(char *const *argv, int fd0, int fd1, int fd2) {
     // increment n_id
     n_id ++;
 
-    // add child process to the adopted list
-
     return n_id - 1;
 }
 
@@ -115,7 +113,6 @@ int ssp_get_status(int ssp_id) {
         waitpid(ssp_ids[ssp_id].pid, &status, WNOHANG);
     }
 
-    // check if status needs to be updated
     // check if child terminated normally (if WIFEXITED(status) is nonzero)
     if (WIFEXITED(status)) {
         ssp_ids[ssp_id].status = WEXITSTATUS(status);
@@ -166,6 +163,33 @@ void ssp_wait() {
 void ssp_print() {
     // set up just, which is the length of the CMD  
     int just = 3;
+    pid_t adopted_pid;
+    int status;
+
+    // check for orphaned processes, as it affects formatting
+
+    // calling waitpid(-1, ...) gets all children, making sure its output is 
+    // greater than 0 (ensures there is a relevant child process)
+    while ((adopted_pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        // check if ssp_ids is big enough
+        if (sr_n_id >= sr_cap_id){
+            sr_cap_id *= 2;
+            sr_ids = (ssp *)realloc(sr_ids, sr_cap_id * sizeof(ssp));
+        }
+
+        // set proc_name
+        sr_ids[sr_n_id].proc_name = "<unknown>";
+        // strcpy(ssp_ids[sr_n_id].proc_name, "<unknown>");
+
+        // set pid
+        sr_ids[sr_n_id].pid = adopted_pid;
+
+        // set status
+        sr_ids[sr_n_id].status = WEXITSTATUS(status);
+        
+        // increment n_id
+        sr_n_id ++;
+    }
 
     // calculate just
     for (int i = 0; i < n_id; i ++){
@@ -174,9 +198,20 @@ void ssp_print() {
         }
     }
 
-    printf("%7s %-*s %s\n", "PID", just, "CMD", "STATUS");
+    // check with "<unknown>", if there are any adopted processes
+    if (sr_n_id > 0 && strlen("<unknown>") > just) {
+        just = strlen("<unknown>");
+    }
 
+    printf("%7s %-*s %s\n", "PID", just, "CMD", "STATUS");
+    
+    // print normal processes
     for (int i = 0; i < n_id; i ++){
         printf("%7d %-*s %d\n", ssp_ids[i].pid, just, ssp_ids[i].proc_name, ssp_ids[i].status);
+    }
+
+    // print adopted ones
+    for (int i = 0; i < sr_n_id; i ++){
+        printf("%7d %-*s %d\n", sr_ids[i].pid, just, sr_ids[i].proc_name, sr_ids[i].status);
     }
 }
