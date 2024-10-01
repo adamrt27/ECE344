@@ -2,7 +2,6 @@
     "build": {
         "dockerfile": "Dockerfile" 
     },
-    "runArgs": ["-h", "ece344"],
     "customizations": {
         "vscode": {
             "settings": {
