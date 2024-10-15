@@ -1,6 +1,7 @@
 #include "vms.h"
 
 #include <assert.h>
+#include <stdio.h>
 
 int expected_exit_status(void) { return 0; }
 
@@ -42,6 +43,7 @@ void test(void) {
     assert(vms_read(virtual_address) == 2);
 
     vms_set_root_page_table(forked_l2);
+    printf("Line 45: %d\n", vms_read(virtual_address));
     assert(vms_read(virtual_address) == 1);
     vms_write(virtual_address, 3);
     assert(vms_get_used_pages() == 8);

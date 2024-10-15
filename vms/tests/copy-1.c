@@ -1,4 +1,5 @@
 #include "vms.h"
+#include <stdio.h>
 
 #include <assert.h>
 
