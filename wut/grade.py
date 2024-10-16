@@ -1,55 +1,22 @@
 #!/usr/bin/env python3
 
+import argparse
 import json
 import pathlib
-import shutil
 import subprocess
 
-wut_dir = pathlib.Path(__file__).resolve().parent
-build_dir = wut_dir.joinpath('build')
-
-shutil.rmtree(build_dir, ignore_errors=True)
-
-subprocess.run(
-    ['meson', 'setup', 'build'],
-    check=True,
-    cwd=wut_dir,
-    stdout=subprocess.DEVNULL
-)
-
-subprocess.run(
-    ['meson', 'test', '-C', 'build'],
-    cwd=wut_dir,
-    stdout=subprocess.DEVNULL
-)
-
-grade = 0
-try:
-    with open(wut_dir / 'test.out', 'r') as f:
-        data = f.read()
-        if 'Check:' in data:
-            print('early-testing,5')
-            grade += 5
-        else:
-            print('early-testing,0')
-except:
-    print('early-testing,0')
-
-testlog_path = build_dir.joinpath('meson-logs/testlog.json')
-if not testlog_path.exists():
-    print(f'grade,{grade}')
-    # code doesn't compile?
-    exit(1)
-
-test_weights = {
+BASE_DIR = pathlib.Path(__file__).resolve().parent
+BUILD_DIR = BASE_DIR.joinpath('build')
+TESTLOG_PATH = BUILD_DIR.joinpath('meson-logs/testlog.json')
+TEST_WEIGHTS = {
     'main-thread-is-0': 4,
     'first-thread-is-1': 4,
     'main-thread-yields': 4,
     'first-thread-exits-explicitly': 4,
     'first-thread-exits-implicitly': 4,
-    'first-thread-runs': 4,
-    'main-thread-joins': 4,
-    'first-thread-cancelled': 4,
+    'first-thread-runs': 5,
+    'main-thread-joins': 5,
+    'first-thread-cancelled': 5,
     'thread-in-thread': 5,
     'two-threads': 5,
     'reuse-thread-0': 5,
@@ -61,22 +28,85 @@ test_weights = {
     'lots-of-threads': 5,
     'even-more-threads': 5,
     'fifo-order': 5,
-    'student-a': 4,
-    'join-cancelled-thread': 4,
+    'student-a': 5,
+    'join-cancelled-thread': 5,
 }
 
-with open(testlog_path, 'r') as f:
-    for line in f:
-        test = json.loads(line)
-        weight = test_weights[test['name']]
+def run_tests():
+    if BUILD_DIR.exists():
+        subprocess.run(
+            ['rm', '-rf', 'build'],
+            cwd=BASE_DIR,
+            stdout=subprocess.DEVNULL
+        )
+    subprocess.run(
+        ['meson', 'setup', 'build'],
+        cwd=BASE_DIR,
+        stdout=subprocess.DEVNULL
+    )
+    p = subprocess.run(
+        ['meson', 'compile'],
+        cwd=BUILD_DIR,
+        stdout=subprocess.DEVNULL
+    )
+    if p.returncode != 0:
+        print(json.dumps({'error': 'compile'}, indent=4))
+        exit(1)
+    subprocess.run(
+        ['meson', 'test'],
+        cwd=BUILD_DIR,
+        stdout=subprocess.DEVNULL
+    )
+
+def get_weighted_tests():
+    tests = []
+    with open(TESTLOG_PATH, 'r') as f:
+        for line in f:
+            test = json.loads(line)
+            weight = TEST_WEIGHTS[test['name']]
+            test['weight'] = weight
+            test.pop('command', None)
+            test.pop('env', None)
+            test.pop('starttime', None)
+            test.pop('stdout', None)
+            stderr = test.pop('stderr', None)
+            if stderr:
+               lines = stderr.splitlines(True)
+               num_lines = len(lines)
+               if num_lines > 80:
+                  lines = lines[:80]
+                  lines.append(f'<{num_lines-80} lines omitted>')
+               test['stderr'] = ''.join(lines)
+            tests.append(test)
+    return tests
+
+def get_grade(tests):
+    grade = 0
+    for test in tests:
+        weight = test['weight']
         if test['result'] == 'OK':
-            print(test['name'], weight, sep=',')
             grade += weight
-        elif test['result'] == 'FAIL':
+        else:
+            # Other results: 'TIMEOUT' 'INTERRUPT' 'SKIP' 'FAIL' 'EXPECTEDFAIL'
+            #                'UNEXPECTEDPASS' 'ERROR'
             if weight == 0:
                 grade = 0
                 break
-            print(test['name'], 0, sep=',')
-        else:
-            print(test['name'], 0, sep=',')
-print(f'grade,{grade}')
+    return grade
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args()
+
+    run_tests()
+    tests = get_weighted_tests()
+    grade = get_grade(tests)
+
+    if args.json:
+        print(json.dumps({'grade': grade, 'tests': tests}, indent=4))
+    else:
+        print(grade)
+
+if __name__ == '__main__':
+    main()
