@@ -46,6 +46,21 @@ void FIFO_append(int id, ucontext_t* context) {
     TAILQ_INSERT_TAIL(&LIST_HEAD, new_entry, pointers);
 }
 
+struct list_entry* FIFO_get(void) {
+    // Check if the list is empty
+    if (TAILQ_EMPTY(&LIST_HEAD)) {
+        return NULL;  // No elements in the queue
+    }
+
+    // Get the first element in the queue
+    struct list_entry *entry = TAILQ_FIRST(&LIST_HEAD);
+
+    // Remove the entry from the queue
+    TAILQ_REMOVE(&LIST_HEAD, entry, pointers);
+
+    return entry;  // Return the removed entry
+}
+
 // Thread control blocks array
 struct TCB_arr {
     ucontext_t** arr; // Array of pointers to ucontext_t
@@ -198,7 +213,21 @@ int wut_join(int id) {
 }
 
 int wut_yield() {
-    return -1;
+    // get next in FIFO
+    struct list_entry* temp = FIFO_get();
+
+    // put current thread in end of the queue
+    FIFO_append(ct.id, ct.uct);
+
+    // save old ct value and put in new ct
+    ucontext_t* old = ct.uct;
+    ct.uct = temp->context;
+    ct.id = temp->id;
+
+    // swap the two
+    swapcontext(old, temp->context);
+
+    return 0;
 }
 
 void wut_exit(int status) {
