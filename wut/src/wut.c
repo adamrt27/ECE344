@@ -168,13 +168,13 @@ int wut_create(void (*run)(void)) {
     char *tN_stack = new_stack();
 
     // intialize
-    getcontext(&tN_context);
+    getcontext(tN_context);
     tN_context->uc_stack.ss_sp = tN_stack;
     tN_context->uc_stack.ss_size = SIGSTKSZ;
 
     // call makecontext to set the context
     makecontext(
-        &tN_context,
+        tN_context,
         run,
         0
     );
