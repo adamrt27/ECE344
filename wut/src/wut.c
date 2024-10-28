@@ -10,12 +10,12 @@
 #include <sys/queue.h> // TAILQ_*
 #include <ucontext.h> // getcontext, makecontext, setcontext, swapcontext
 #include <valgrind/valgrind.h> // VALGRIND_STACK_REGISTER
+#include <stdbool.h>
 
 // FIFO (implemented as a doubly LL with queue.h)
 // This struct defines a single entry in our doubly linked list
 struct list_entry{
     int id;                             // id of context (index in list)
-    ucontext_t* context;                // actual context
     TAILQ_ENTRY(list_entry) pointers;   // adds two pointers for each node, one to next, one to previous
 };
 TAILQ_HEAD(list_head, list_entry);      // defines the head for our list
@@ -30,7 +30,7 @@ void FIFO_print(void) {
     printf("\n");
 }
 
-void FIFO_append(int id, ucontext_t* context) {
+void FIFO_append(int id) {
     struct list_entry *new_entry = malloc(sizeof(struct list_entry));
     if (new_entry == NULL) {
         perror("Failed to allocate memory for new entry");
@@ -39,10 +39,6 @@ void FIFO_append(int id, ucontext_t* context) {
 
     // initialize id
     new_entry->id = id;
-
-    // initialize context
-    new_entry->context = context;
-
     TAILQ_INSERT_TAIL(&LIST_HEAD, new_entry, pointers);
 }
 
@@ -61,9 +57,29 @@ struct list_entry* FIFO_get(void) {
     return entry;  // Return the removed entry
 }
 
+bool FIFO_find(int id) {
+    struct list_entry *entry;
+
+    // Iterate through the list to find an entry with the specified ID
+    TAILQ_FOREACH(entry, &LIST_HEAD, pointers) {
+        if (entry->id == id) {
+            return true;  // ID found in the list
+        }
+    }
+
+    return false;  // ID not found in the list
+}
+
 // Thread control blocks array
+struct TCB {
+    int id;                // Unique thread ID
+    ucontext_t *context;   // Pointer to thread context
+    int status;            // Exit status (0-255)
+    bool finished;         // Completion flag
+};
+
 struct TCB_arr {
-    ucontext_t** arr; // Array of pointers to ucontext_t
+    struct TCB** arr; // Array of pointers to ucontext_t
     int size;         // Current number of contexts
     int cap;          // Capacity of the array
 } TCB_array = {NULL, 0, 0};
@@ -72,7 +88,7 @@ struct TCB_arr {
 // Initialize the TCB array with an initial capacity
 void TCB_init(struct TCB_arr *a, int initial_cap) {
     if (initial_cap > 0) {
-        a->arr = malloc(initial_cap * sizeof(ucontext_t*));
+        a->arr = malloc(initial_cap * sizeof(struct TCB*));
         if (a->arr == NULL) {
             perror("Failed to allocate memory for TCB array");
             exit(EXIT_FAILURE);
@@ -90,7 +106,7 @@ int TCB_add(struct TCB_arr *a, ucontext_t* uct) {
     // Check if we need to expand the array
     if (a->size >= a->cap) {
         int new_cap = (a->cap > 0) ? a->cap * 2 : 1;
-        ucontext_t** new_arr = realloc(a->arr, new_cap * sizeof(ucontext_t*));
+        struct TCB** new_arr = realloc(a->arr, new_cap * sizeof(struct TCB*));
         if (new_arr == NULL) {
             perror("Failed to reallocate memory for TCB array");
             exit(EXIT_FAILURE);
@@ -99,19 +115,25 @@ int TCB_add(struct TCB_arr *a, ucontext_t* uct) {
         a->cap = new_cap;
     }
 
-    // Add the new context to the array and increment size
-    a->arr[a->size] = uct;
+    // Create and initialize a new TCB
+    struct TCB *new_tcb = malloc(sizeof(struct TCB));
+    if (new_tcb == NULL) {
+        perror("Failed to allocate memory for TCB");
+        return -1;
+    }
+    new_tcb->id = a->size;       // Assign an ID based on the current size
+    new_tcb->context = uct;      // Set the context pointer
+    new_tcb->status = -1;        // Default exit status (indicates not yet exited)
+    new_tcb->finished = false;   // Mark as not finished
+
+    // Add the new TCB to the array and increment size
+    a->arr[a->size] = new_tcb;
     a->size++;
-    return a->size - 1; // returns id
+    return new_tcb->id; // Return the new thread's ID
 }
 
 // keep track of main thread
-typedef struct cur_thread {
-    int id;
-    ucontext_t* uct;
-} cur_thread;
-
-cur_thread ct;
+int ct_id;
 
 static void die(const char* message) {
     int err = errno;
@@ -144,17 +166,6 @@ static void delete_stack(char* stack) {
 }
 
 void wut_init() {
-    /*
-    This will always be called once before a user makes any other call to your library. 
-    You need to set up the main thread executing wut_init as thread 0. You should 
-    initialize or setup anything else you need here.
-
-    Your library should keep track of the following: the currently running thread, a 
-    FIFO queue of waiting (or ready) threads, and thread control blocks for all threads. 
-    Your thread control blocks should be in a dynamically sized array, you'll find realloc
-    array helpful.
-    */
-
     // initialize the queue (FIFO) for threads
     TAILQ_INIT(&LIST_HEAD);
 
@@ -166,15 +177,14 @@ void wut_init() {
     TCB_add(&TCB_array, t0_ucontext);
 
     // initialize cur_thread tracker
-    ct.id = 0;
-    ct.uct = t0_ucontext;
+    ct_id = 0;
 
     // getcontext to initialize the thread
     getcontext(t0_ucontext);
 }
 
 int wut_id() {
-    return ct.id;
+    return ct_id;
 }
 
 // define this function to implicitly exit threads
@@ -208,7 +218,7 @@ int wut_create(void (*run)(void)) {
     int id = TCB_add(&TCB_array, tN_context);
 
     // add to FIFO
-    FIFO_append(id, tN_context);
+    FIFO_append(id);
 
     return id;
 }
@@ -218,7 +228,19 @@ int wut_cancel(int id) {
 }
 
 int wut_join(int id) {
+    // save current thread and switch to next thread in the queue (don't add to queue)
+    int jt_id = ct_id;
 
+    // get next in FIFO
+    struct list_entry* temp = FIFO_get();
+    // if there is nothign else in queue return error
+    if(temp == NULL) {
+        return -1;
+    }
+    
+    // switch to the next process
+
+    // poll for TCB_array[id] to be finished
     return -1;
 }
 
@@ -231,17 +253,16 @@ int wut_yield() {
     }
 
     // put current thread in end of the queue
-    FIFO_append(ct.id, ct.uct);
+    FIFO_append(ct_id);
 
     // save old ct value and put in new ct
-    ucontext_t* old = ct.uct;
-    ct.uct = temp->context;
-    ct.id = temp->id;
+    ucontext_t* old = TCB_array.arr[ct_id]->context;
+    ct_id = temp->id;
 
     // swap the two
-    if (swapcontext(old, ct.uct) == -1) {
-    perror("swapcontext failed");
-    return -1;
+    if (swapcontext(old, TCB_array.arr[ct_id]->context) == -1) {
+        perror("swapcontext failed");
+        return -1;
     }
 
     return 0;
@@ -256,10 +277,13 @@ void wut_exit(int status) {
         exit(0);
     }
 
+    // set exit status of current
+    TCB_array.arr[ct_id]->status = status & 0xFF;
+    TCB_array.arr[ct_id]->finished = true;
+
     // save old ct value and put in new ct
-    ct.uct = temp->context;
-    ct.id = temp->id;
+    ct_id = temp->id;
 
     // go to next
-    setcontext(ct.uct);
+    setcontext(TCB_array.arr[ct_id]->context);
 }
