@@ -177,6 +177,15 @@ int wut_id() {
     return ct.id;
 }
 
+// define this function to implicitly exit threads
+
+void (*global_func_ptr)(void);
+
+void thread_wrapper(void) {
+    global_func_ptr();
+    wut_exit(0);
+}
+
 int wut_create(void (*run)(void)) {
     // create new thread and associated stack
     ucontext_t* tN_context = malloc(sizeof(ucontext_t));
@@ -188,9 +197,10 @@ int wut_create(void (*run)(void)) {
     tN_context->uc_stack.ss_size = SIGSTKSZ;
 
     // call makecontext to set the context
+    global_func_ptr = run;
     makecontext(
         tN_context,
-        run,
+        thread_wrapper,
         0
     );
 
@@ -215,6 +225,10 @@ int wut_join(int id) {
 int wut_yield() {
     // get next in FIFO
     struct list_entry* temp = FIFO_get();
+    // if there is nothign else in queue return error
+    if(temp == NULL) {
+        return -1;
+    }
 
     // put current thread in end of the queue
     FIFO_append(ct.id, ct.uct);
@@ -225,10 +239,27 @@ int wut_yield() {
     ct.id = temp->id;
 
     // swap the two
-    swapcontext(old, temp->context);
+    if (swapcontext(old, ct.uct) == -1) {
+    perror("swapcontext failed");
+    return -1;
+    }
 
     return 0;
 }
 
 void wut_exit(int status) {
+    // just switch to next thread and dont put the current back in queue
+    // get next in FIFO
+    struct list_entry* temp = FIFO_get();
+    // if the queue is empty, exit the process
+    if(temp == NULL){
+        exit(0);
+    }
+
+    // save old ct value and put in new ct
+    ct.uct = temp->context;
+    ct.id = temp->id;
+
+    // go to next
+    setcontext(ct.uct);
 }
