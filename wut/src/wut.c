@@ -70,6 +70,22 @@ bool FIFO_find(int id) {
     return false;  // ID not found in the list
 }
 
+bool FIFO_remove(int id) {
+    struct list_entry *entry;
+
+    // Iterate through the list to find the entry with the given id
+    TAILQ_FOREACH(entry, &LIST_HEAD, pointers) {
+        if (entry->id == id) {
+            // Found the entry; remove it from the list
+            TAILQ_REMOVE(&LIST_HEAD, entry, pointers);
+            free(entry);  // Free the memory allocated for the entry
+            return true;  // Indicate that removal was successful
+        }
+    }
+
+    return false;  // Entry with the specified id was not found
+}
+
 // Thread control blocks array
 struct TCB {
     int id;                // Unique thread ID
@@ -101,6 +117,16 @@ void TCB_init(struct TCB_arr *a, int initial_cap) {
     a->size = 0;
 }
 
+int TCB_get_next_id(struct TCB_arr *a){
+    // go through a and get first availible 
+    for (int i = 0; i < a->size; i ++){
+        if (a->arr[i]->finished) {
+            return i;
+        }
+    }
+    return a->size;
+}
+
 // Add a new context to the TCB array
 int TCB_add(struct TCB_arr *a, ucontext_t* uct) {
     // Check if we need to expand the array
@@ -121,7 +147,7 @@ int TCB_add(struct TCB_arr *a, ucontext_t* uct) {
         perror("Failed to allocate memory for TCB");
         return -1;
     }
-    new_tcb->id = a->size;       // Assign an ID based on the current size
+    new_tcb->id = TCB_get_next_id(a);       // Assign an ID based on the current size
     new_tcb->context = uct;      // Set the context pointer
     new_tcb->status = -1;        // Default exit status (indicates not yet exited)
     new_tcb->finished = false;   // Mark as not finished
@@ -130,6 +156,15 @@ int TCB_add(struct TCB_arr *a, ucontext_t* uct) {
     a->arr[a->size] = new_tcb;
     a->size++;
     return new_tcb->id; // Return the new thread's ID
+}
+
+int TCB_get(struct TCB_arr *a, int id) {
+    for (int i = 0; i < a->size; i ++) {
+        if (a->arr[i]->id == id && !a->arr[i]->finished){
+            return i;
+        }
+    }
+    return -1;
 }
 
 // keep track of main thread
@@ -193,6 +228,7 @@ void (*global_func_ptr)(void);
 
 void thread_wrapper(void) {
     global_func_ptr();
+    printf("done running in thread %d\n", ct_id);
     wut_exit(0);
 }
 
@@ -224,24 +260,70 @@ int wut_create(void (*run)(void)) {
 }
 
 int wut_cancel(int id) {
-    return -1;
+    // remove thread from FIFO 
+    if (!FIFO_remove(id)) {
+        return -1;
+    }
+
+    TCB_array.arr[id]->finished = true;
+    TCB_array.arr[id]->status = 128;
+    return 0;
 }
 
 int wut_join(int id) {
-    // save current thread and switch to next thread in the queue (don't add to queue)
-    int jt_id = ct_id;
+    printf("wut_join call from cur %d to id %d\n", ct_id, id);
+    // check if id is current thread (cant join with self)
+    if (id == ct_id) {
+        return -1;
+    }
+
+    // if id not in queue or current thread, return error
+    if (!FIFO_find(id) && ct_id != id) {
+        printf("error?\n");
+        return -1;
+    }
+
+    // if already terminated return status
+    if (TCB_get(&TCB_array, id) == -1) {
+        printf("alr terminated\n");
+        int status = TCB_array.arr[id]->status;
+
+        // remove from TCB array if its not TCB
+
+        return status;
+    }
+
+    // save current thread to FIFO
+    FIFO_append(ct_id);
 
     // get next in FIFO
     struct list_entry* temp = FIFO_get();
-    // if there is nothign else in queue return error
+    // if there is nothign else in queue exit 
     if(temp == NULL) {
-        return -1;
+        exit(0);
+    } else { // else swap to next in array
+        // set ct_id
+        int prev_id = ct_id;
+        ct_id = TCB_get(&TCB_array, temp->id);
+
+        printf("wut_join: swapping %d and %d\n", prev_id, ct_id);
+        
+        // switch to the next process
+        if (swapcontext(TCB_array.arr[prev_id]->context, TCB_array.arr[ct_id]->context) == -1) {
+            perror("swapcontext failed");
+            return -1;
+        }
     }
     
-    // switch to the next process
+    printf("Back in %d\n", ct_id);
 
-    // poll for TCB_array[id] to be finished
-    return -1;
+    // check if thread was cancelled
+    if(TCB_array.arr[TCB_get(&TCB_array, ct_id)]->finished) {
+        printf("Exiting %d\n",ct_id);
+        wut_exit(TCB_array.arr[ct_id]->status);
+    }
+
+    return TCB_array.arr[id]->status;
 }
 
 int wut_yield() {
@@ -271,14 +353,17 @@ int wut_yield() {
 void wut_exit(int status) {
     // just switch to next thread and dont put the current back in queue
     // get next in FIFO
+    printf("In exit for thread id %d\n", ct_id);
     struct list_entry* temp = FIFO_get();
     // if the queue is empty, exit the process
     if(temp == NULL){
+        printf("No more threads running\n");
         exit(0);
     }
 
     // set exit status of current
-    TCB_array.arr[ct_id]->status = status & 0xFF;
+    status &= 0xFF;
+    TCB_array.arr[ct_id]->status = status;
     TCB_array.arr[ct_id]->finished = true;
 
     // save old ct value and put in new ct

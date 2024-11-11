@@ -9,6 +9,7 @@ void t3_run(void) {
 }
 
 void t2_run(void) {
+    printf("BEFORE CREATING 3\n");
     int id3 = wut_create(t3_run); 
     shared_memory[3] = id3;
 
@@ -18,7 +19,9 @@ void t2_run(void) {
 }
 
 void t1_run(void) {
+    printf("BEFORE CREATING 2\n");
     int id2 = wut_create(t2_run);
+    printf("AFTER CREATING 2\n");
     shared_memory[2] = id2;
 
     x = x + 1;
@@ -35,9 +38,15 @@ void test(void) {
 
     shared_memory[4] = wut_join(id1);
 
+    printf("FINISHED 1\n");
+
     shared_memory[5] = wut_yield();
 
+    printf("AFTER YEILDING ONCE\n");
+
     shared_memory[7] = wut_yield();
+
+    printf("AFTER YEILDING TWICE\n");    
 
     shared_memory[8] = x;
 } 
