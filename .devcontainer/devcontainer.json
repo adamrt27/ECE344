@@ -2,6 +2,9 @@
     "build": {
         "dockerfile": "Dockerfile" 
     },
+    "runArgs": [
+        "--privileged"
+    ],
     "customizations": {
         "vscode": {
             "settings": {
